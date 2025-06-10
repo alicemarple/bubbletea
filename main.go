@@ -3,147 +3,144 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Colors and highlight function
 var (
-	cursorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	keywordStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
-	helpStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Width(100). // Set width
-			Height(10).                                                         // Set height for vertical centering
-			Align(lipgloss.Center)
-	progressStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("72"))
+	highlight = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#eba0ac")).
+			Render
+
+	focusedBorder   = lipgloss.Color("#fab387")
+	unfocusedBorder = lipgloss.Color("#89b4fa")
 )
 
-type tickMsg struct{}
+type focusArea int
 
-type Item struct {
-	name   string
-	bought bool
-}
+const (
+	focusLeft focusArea = iota
+	focusRight
+)
 
 type model struct {
-	cursor     int
-	items      []Item
-	selected   []string
-	installing bool
-	progress   int
+	cursor  int
+	focus   focusArea
+	width   int
+	height  int
+	items   []string
+	content map[string][]string
 }
 
 func initialModel() model {
 	return model{
-		items: []Item{
-			{"Neovim", false},
-			{"Bat", false},
-			{"Fzf", false},
-			{"Ripgrep", false},
-			{"Eza", false},
-			{"Lazygit", false},
+		cursor: 0,
+		focus:  focusLeft,
+		items:  []string{"Environment", "OS", "Packages"},
+		content: map[string][]string{
+			"Environment": {"Dev", "Hacking"},
+			"OS":          {"Kali", "Arch", "Ubuntu"},
+			"Packages":    {"Neovim", "Tmux", "Zsh"},
 		},
 	}
 }
 
-// Init is the initial setup function
-func (m model) Init() tea.Cmd {
-	return nil
-}
+func (m model) Init() tea.Cmd { return nil }
 
-// Update handles messages (user input)
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q":
+		case "ctrl+c", "q":
 			return m, tea.Quit
-		case "j":
-			if m.cursor < len(m.items)-1 {
-				m.cursor++
-			}
-		case "k":
-			if m.cursor > 0 {
+		case "up", "k":
+			if m.focus == focusLeft && m.cursor > 0 {
 				m.cursor--
 			}
-		case " ": // Toggle checkbox
-			m.items[m.cursor].bought = !m.items[m.cursor].bought
-		case "enter":
-			m.selected = nil
-			for _, item := range m.items {
-				if item.bought {
-					m.selected = append(m.selected, item.name)
-				}
+		case "down", "j":
+			if m.focus == focusLeft && m.cursor < len(m.items)-1 {
+				m.cursor++
 			}
-			if len(m.selected) > 0 {
-				m.installing = true
-				m.progress = 0
-				return m, installPackages()
-			}
-			return m, tea.Quit
-		}
-	case tickMsg:
-		if m.installing {
-			if m.progress < 100 {
-				m.progress += 10
-				return m, tea.Tick(time.Second/2, func(time.Time) tea.Msg {
-					return tickMsg{}
-				})
-			} else {
-				m.installing = false
-			}
+		case "h":
+			m.focus = focusLeft
+		case "l":
+			m.focus = focusRight
 		}
 	}
 	return m, nil
 }
 
-func installPackages() tea.Cmd {
-	return tea.Tick(time.Second/2, func(time.Time) tea.Msg {
-		return tickMsg{}
-	})
-}
-
-// View renders the UI
 func (m model) View() string {
-	var output string
-	for i, item := range m.items {
-		cursor := " " // Cursor indicator
-		if i == m.cursor {
-			cursor = ">" // Highlight current selection
-		}
+	leftStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(unfocusedBorder).
+		Width(m.width*15/100).
+		Height(m.height*30/100).
+		Margin(2, 1)
 
-		checkbox := "[ ]" // Checkbox
-		if item.bought {
-			checkbox = "[x]" // Marked as bought
-		}
+	rightStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(unfocusedBorder).
+		Width(m.width*60/100).
+		Height(m.height*80/100).
+		Margin(2, 0)
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#89b4fa")).
+		Align(lipgloss.Center).
+		Width(m.width).
+		MarginTop(1)
 
-		output += fmt.Sprintf("%s %s %s\n", cursorStyle.Render(cursor), keywordStyle.Render(checkbox), keywordStyle.Render(item.name))
-	}
-
-	if m.installing {
-		output += "\nInstalling selected packages:\n"
-		output += progressStyle.Render(fmt.Sprintf("[%s] %d%%", string(repeat('#', m.progress/10)), m.progress)) + "\n"
-	} else if len(m.selected) > 0 {
-		output += "\nSelected items:\n"
-		for _, item := range m.selected {
-			output += fmt.Sprintf("- %s\n", keywordStyle.Render(item))
-		}
+	if m.focus == focusLeft {
+		leftStyle = leftStyle.BorderForeground(focusedBorder)
 	} else {
-		output += "\nNo items selected.\n"
+		rightStyle = rightStyle.BorderForeground(focusedBorder)
 	}
-	output += "\n\n\n\n" + helpStyle.Render("  j: down • k: up • space: toggle • enter: install • q: exit\n")
 
-	return output
+	left := m.renderLeft()
+	right := m.renderRight()
+	help := helpStyle.Render("  space: toggle select • i: install • j: up • k: down • q: exit\n")
+
+	up := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftStyle.Render(left),
+		rightStyle.Render(right),
+	)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Top,
+		up,
+		help,
+	)
 }
 
-func repeat(char rune, count int) string {
-	return string(make([]rune, count, count))
+func (m model) renderLeft() string {
+	var b strings.Builder
+	for i, item := range m.items {
+		if i == m.cursor {
+			fmt.Fprintf(&b, "%s\n", highlight("> "+item))
+		} else {
+			fmt.Fprintf(&b, "  %s\n", item)
+		}
+	}
+	return b.String()
+}
+
+func (m model) renderRight() string {
+	selected := m.items[m.cursor]
+	return strings.Join(m.content[selected], "\n")
 }
 
 func main() {
-	m := initialModel()
-	if _, err := tea.NewProgram(&m).Run(); err != nil {
-		fmt.Println("Error running program:", err)
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 }
