@@ -1,0 +1,10 @@
+environment : dev
+os : none
+packages :
+tmux
+neovim
+fd
+ripgrep
+trash-cli
+fzf
+zoxide
